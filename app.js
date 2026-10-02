@@ -447,11 +447,31 @@
     $('#signin').classList.add('hidden');
     $('#app').classList.remove('hidden');
     $('#who-email').textContent = email + (DEMO ? ' · demo' : '');
+    $('#who-email').title = email;
     $('#who-avatar').textContent = (email[0] || 'A').toUpperCase();
+    fitWhoEmail();
     readUrl();
     setView(state.view);
     loadAll();
   }
+
+  // Shrink the signed-in email (12.5px → 10px) until it fits on one line in
+  // the sidebar card; an extremely long address still wraps at 10px.
+  function fitWhoEmail() {
+    const el = $('#who-email');
+    if (!el || !el.offsetParent) return;
+    el.style.whiteSpace = 'nowrap';
+    let size = 12.5;
+    el.style.fontSize = size + 'px';
+    while (size > 10 && el.scrollWidth > el.clientWidth) {
+      size -= 0.5;
+      el.style.fontSize = size + 'px';
+    }
+    if (el.scrollWidth > el.clientWidth) el.style.whiteSpace = '';
+  }
+  let fitTimer = 0;
+  window.addEventListener('resize', () => { clearTimeout(fitTimer); fitTimer = setTimeout(fitWhoEmail, 100); });
+  document.fonts?.ready.then(fitWhoEmail);
 
   // ---------------------------------------------------------------- loading
   let loadingCount = 0;
