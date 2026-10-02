@@ -47,6 +47,7 @@
     not_deactivated: 'This account is already active. Refresh the list.',
     kit_not_found: 'That kit no longer exists. Refresh the list.',
     kit_not_claimed: 'This kit isn’t claimed anymore. Refresh the list.',
+    kit_not_locked: 'This kit isn’t paused anymore. Refresh the list.',
     account_deactivated: 'This account is deactivated. Reactivate it first.',
     already_admin: 'This email is already an administrator.',
     cannot_remove_self: 'You can’t remove yourself. Ask another administrator to do it.',
@@ -93,6 +94,7 @@
     deactivate: (id, reason) => real.rpc('admin_deactivate_account', { p_user: id, p_reason: reason }),
     reactivate: (id, note) => real.rpc('admin_reactivate_account', { p_user: id, p_note: note || null }),
     unredeemKit: (id, reason) => real.rpc('admin_unredeem_kit', { p_kit: id, p_reason: reason }),
+    unlockKit: (id, note) => real.rpc('admin_unlock_kit', { p_kit: id, p_note: note }),
     listAdmins: () => real.rpc('admin_list_admins'),
     // A brand-new email has no sign-in yet: the admin-create-login Edge
     // Function (admin-only, server-side) creates it, then we retry.
@@ -182,7 +184,7 @@
       { id: 'demo-k0', serial: 'FK-4XDEMO7K', imu_ble_id: 'C4:7A:11:90:2B:01', tactile_ble_id: 'C4:7A:11:90:2B:02', created_at: iso(60), claimed_by: 'demo-p0', claimed_at: iso(40) },
       { id: 'demo-k1', serial: 'FK-3H9TQ2MD', imu_ble_id: 'C4:7A:11:90:2C:01', tactile_ble_id: 'C4:7A:11:90:2C:02', created_at: iso(60), claimed_by: 'demo-p1', claimed_at: iso(33) },
       { id: 'demo-k2', serial: 'FK-7NRX4C8E', imu_ble_id: 'C4:7A:11:90:2D:01', tactile_ble_id: 'C4:7A:11:90:2D:02', created_at: iso(60), claimed_by: 'demo-p3', claimed_at: iso(55) },
-      { id: 'demo-k3', serial: 'FK-2PLM6V5J', imu_ble_id: null, tactile_ble_id: null, created_at: iso(14), claimed_by: null, claimed_at: null },
+      { id: 'demo-k3', serial: 'FK-2PLM6V5J', imu_ble_id: null, tactile_ble_id: null, created_at: iso(14), claimed_by: null, claimed_at: null, locked_at: iso(3), locked_reason: 'Removed by patient' },
       { id: 'demo-k4', serial: 'FK-9WQD8K3A', imu_ble_id: 'C4:7A:11:90:2E:01', tactile_ble_id: null, created_at: iso(14), claimed_by: 'demo-p6', claimed_at: iso(60) },
     ];
     // A patient removed a damaged kit from the app (release_kit, migration 012).
@@ -260,7 +262,15 @@
         if (!k) throw new Error('kit_not_found');
         if (!k.claimed_by) throw new Error('kit_not_claimed');
         pushRaw('kits', id, 'kit:unredeem', { serial: k.serial, claimed_by: k.claimed_by, claimed_at: k.claimed_at }, { serial: k.serial, reason: reason.trim() });
-        k.claimed_by = null; k.claimed_at = null;
+        k.claimed_by = null; k.claimed_at = null; k.locked_at = null; k.locked_reason = null;
+        return k.serial;
+      },
+      async unlockKit(id, note) {
+        const k = kits.find((x) => x.id === id);
+        if (!k) throw new Error('kit_not_found');
+        if (!k.locked_at) throw new Error('kit_not_locked');
+        pushRaw('kits', id, 'kit:unlock', { serial: k.serial, locked_at: k.locked_at, locked_reason: k.locked_reason }, { serial: k.serial, note: note || null });
+        k.locked_at = null; k.locked_reason = null;
         return k.serial;
       },
       async listDoctors() { await sleep(150); return doctors.map((d) => ({ ...d })); },
@@ -1104,12 +1114,15 @@
       noun: 'doctors', hint: 'a name, email, doctor ID or registration number',
     },
     kits: {
-      filters: [['claimed', 'Claimed'], ['unclaimed', 'Unclaimed'], ['all', 'All']], def: 'all', cols: 6,
-      search: 'Search kits…', list: () => state.kits, isIn: (r, f) => f === 'all' || (f === 'claimed') === !!r.claimed_by,
+      filters: [['claimed', 'Claimed'], ['paused', 'Paused'], ['unclaimed', 'Available'], ['all', 'All']], def: 'all', cols: 6,
+      search: 'Search kits…', list: () => state.kits, isIn: (r, f) => f === 'all' || f === kitState(r),
       fields: (r) => [r.serial, r.imu_ble_id, r.tactile_ble_id, r.patient_name, r.patient_email],
       noun: 'kits', hint: 'a serial, module ID or patient name',
     },
   };
+  // A kit is claimed (linked to a patient), paused (removed by its patient;
+  // nobody can redeem it until an admin makes it available), or available.
+  const kitState = (r) => r.claimed_by ? 'claimed' : r.locked_at ? 'paused' : 'unclaimed';
   const activePill = (r) => r.deactivated_at ? '<span class="pill suspended">Deactivated</span>' : '<span class="pill approved">Active</span>';
   const deactNote = (r) => r.deactivated_at ? `<div class="doc-email" title="${esc(r.deactivation_reason || '')}">${esc(fmtDate(r.deactivated_at))}${r.deactivated_by_email ? ` · ${esc(r.deactivated_by_email)}` : ''}</div>` : '';
   const acctBtn = (r, kind) => {
@@ -1146,10 +1159,13 @@
       <tr style="cursor:default">
         <td class="mono doc-name" translate="no">${esc(r.serial)}</td>
         <td class="mono" translate="no"><div class="doc-email">IMU ${esc(r.imu_ble_id || '—')}</div><div class="doc-email">Tactile ${esc(r.tactile_ble_id || '—')}</div></td>
-        <td>${r.claimed_by ? `<div class="doc-name">${esc(r.patient_name || '—')}${r.patient_deactivated ? ' <span class="muted" style="font-weight:500;font-size:12px">(deactivated)</span>' : ''}</div><div class="doc-email">${esc(r.patient_email || '')}</div>` : '<span class="pill neutral">Unclaimed</span>'}</td>
+        <td>${r.claimed_by ? `<div class="doc-name">${esc(r.patient_name || '—')}${r.patient_deactivated ? ' <span class="muted" style="font-weight:500;font-size:12px">(deactivated)</span>' : ''}</div><div class="doc-email">${esc(r.patient_email || '')}</div>`
+          : r.locked_at ? `<span class="pill suspended">Paused</span><div class="doc-email">${esc(r.locked_reason || 'Paused')} · ${esc(fmtDate(r.locked_at))}</div>`
+          : '<span class="pill neutral">Available</span>'}</td>
         <td class="muted">${esc(fmtDate(r.claimed_at))}</td>
         <td class="muted">${esc(fmtDate(r.created_at))}</td>
-        <td style="text-align:right">${r.claimed_by ? `<button class="btn sm danger" data-act="unredeem" data-id="${esc(r.id)}" aria-label="Unredeem kit ${esc(r.serial)}">Unredeem</button>` : ''}</td>
+        <td style="text-align:right">${r.claimed_by ? `<button class="btn sm danger" data-act="unredeem" data-id="${esc(r.id)}" aria-label="Unredeem kit ${esc(r.serial)}">Unredeem</button>`
+          : r.locked_at ? `<button class="btn sm approve" data-act="unlock" data-id="${esc(r.id)}" aria-label="Make kit ${esc(r.serial)} available">Make Available</button>` : ''}</td>
       </tr>`,
   };
 
@@ -1183,6 +1199,7 @@
       const r = list.find((x) => x.id === b.dataset.id);
       if (!r) return;
       if (b.dataset.act === 'unredeem') unredeemKit(r);
+      else if (b.dataset.act === 'unlock') unlockKit(r);
       else if (b.dataset.act === 'deactivate') deactivateAccount(view === 'patients' ? 'patient' : 'doctor', r);
       else reactivateAccount(view === 'patients' ? 'patient' : 'doctor', r);
     });
@@ -1239,8 +1256,24 @@
     } catch (e) { toast(errMsg(e), 'error'); }
   }
 
+  async function unlockKit(k) {
+    const note = await confirmModal({
+      title: `Make Kit ${k.serial} Available?`,
+      body: 'This kit was removed by its patient and is paused. After this, anyone with the kit’s QR card can redeem it again — only do this once the kit is back with the study team.',
+      optionalNote: true, noteLabel: 'Note (optional, kept in the audit log)', notePlaceholder: 'e.g. Kit repaired and returned to stock…',
+      confirm: 'Make Available', kind: 'approve',
+    });
+    if (note === null) return;
+    try {
+      await busy(() => api.unlockKit(k.id, note || null));
+      toast(`Kit ${k.serial} is available again.`);
+      await loadAll();
+    } catch (e) { toast(errMsg(e), 'error'); }
+  }
+
   // ---------------------------------------------------------------- audit
   function auditLabel(a) {
+    if (a.action === 'kit:unlock') return 'Kit Made Available';
     if (a.action === 'account:deactivate') return 'Account Deactivated';
     if (a.action === 'account:reactivate') return 'Account Reactivated';
     if (a.action === 'kit:unredeem') return 'Kit Unredeemed';

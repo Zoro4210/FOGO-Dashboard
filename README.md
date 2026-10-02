@@ -1,4 +1,4 @@
-# FOGO Admin Dashboard
+﻿# FOGO Admin Dashboard
 
 This is a static web page where administrators invite doctors and manage their access. The invitation is the verification:
 
@@ -17,14 +17,14 @@ This repository is the deployable copy of the `admin/` folder in the main FOGO r
 
 ## Security
 - Nothing secret lives in this folder. The browser only ever gets the project URL and the **publishable** key, which are public by design. All protection is server-side: every `admin_*` RPC checks `is_admin()`, the admin tables have RLS with no client policies, and sign-in is an emailed code for existing users only.
-- `build.js` refuses to deploy a secret or service-role key, and publishes only `index.html`, `app.js` and `config.js` — this README, `vercel.json` and the build script are never served.
+- `build.js` refuses to deploy a secret or service-role key, and publishes only `index.html`, `app.js` and `config.js` â€” this README, `vercel.json` and the build script are never served.
 - `vercel.json` sends a strict Content-Security-Policy (no inline or third-party scripts beyond the pinned supabase-js), HSTS, no framing, no referrer, no caching and no indexing.
 - Never commit `config.js`, `.env` files or `public/` (all gitignored).
 
 ## Setup
 
-1. Apply migrations **009 through 014** (013 makes an invitation the verification, 014 adds admin management) from the main FOGO repository's `supabase/migrations/`, and deploy its `admin-create-login` Edge Function (`supabase/functions/`). Both are already live on the project.
-2. Make yourself the first admin (only needed once; after that, add admins from the dashboard). The account must already exist as an auth user, so sign in to the app once or create it under Authentication → Users.
+1. Apply migrations **009 through 015** (013 makes an invitation the verification, 014 adds admin management, 015 pauses removed kits) from the main FOGO repository's `supabase/migrations/`, and deploy its `admin-create-login` Edge Function (`supabase/functions/`). Both are already live on the project.
+2. Make yourself the first admin (only needed once; after that, add admins from the dashboard). The account must already exist as an auth user, so sign in to the app once or create it under Authentication â†’ Users.
    ```sql
    insert into public.admins (user_id, email)
    select id, email from auth.users where email = 'you@example.org';
@@ -41,10 +41,10 @@ To see the UI with sample data and no backend, open http://localhost:8790/?demo.
 ## Hosting on Vercel
 
 1. In Vercel, choose New Project and import this repository. Leave **Root Directory** at the repository root and **Framework Preset** at Other.
-2. Under Settings → Environment Variables, add `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY`, the same values as `fog_assist/env.json`.
+2. Under Settings â†’ Environment Variables, add `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY`, the same values as `fog_assist/env.json`.
 3. Deploy. `build.js` writes `config.js` from those variables at build time and publishes only the page files; `vercel.json` adds the security headers.
 
-Any other static host works too: deploy only `index.html`, `app.js` and a `config.js`, with the same headers. Under Supabase → Authentication → URL configuration, add the site URL to the allowed redirect URLs. The page uses 6-digit codes, not magic links, so this is only a precaution.
+Any other static host works too: deploy only `index.html`, `app.js` and a `config.js`, with the same headers. Under Supabase â†’ Authentication â†’ URL configuration, add the site URL to the allowed redirect URLs. The page uses 6-digit codes, not magic links, so this is only a precaution.
 
 ## Accounts and kits
 
@@ -53,6 +53,7 @@ The **Patients**, **Doctors** and **Kits** pages need migration 011. Patients re
 - **Deactivate** (a reason is required, and the action is audited) blocks sign-in and ends all pending and active doctor links. A doctor is also marked unverified. A patient's claimed kits are released. All sessions, episodes, notes and consent records are kept. You can't deactivate your own account.
 - **Reactivate** lifts the sign-in block. It does not restore links or kits. A doctor regains access only if their status is still Active.
 - **Unredeem** (kits, a reason is required, and the action is audited) clears the claim so another patient can claim the kit. Past sessions stay with the original patient.
+- **Paused kits** (migration 015): a scanned kit belongs to that patient. If the patient removes it in the app (e.g. damaged), it shows here as **Paused** and its QR card can't be redeemed by anyone. **Make Available** (audited as "Kit Made Available") lets it be redeemed again â€” do this only once the kit is back with the study team.
 
 A deactivated doctor can't be approved until the account is reactivated.
 
