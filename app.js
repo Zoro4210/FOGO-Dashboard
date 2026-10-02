@@ -47,7 +47,11 @@
     not_deactivated: 'This account is already active. Refresh the list.',
     kit_not_found: 'That kit no longer exists. Refresh the list.',
     kit_not_claimed: 'This kit isn’t claimed anymore. Refresh the list.',
-    account_deactivated: 'This doctor’s account is deactivated. Reactivate it on the Doctors page before approving.',
+    account_deactivated: 'This account is deactivated. Reactivate it first.',
+    already_admin: 'This email is already an administrator.',
+    cannot_remove_self: 'You can’t remove yourself. Ask another administrator to do it.',
+    admin_not_found: 'That administrator was already removed. Refresh the list.',
+    create_failed: 'Couldn’t create a sign-in for this email. Try again in a moment.',
   };
   const PENDING = ['submitted', 'awaiting_document'];
   const isPending = (s) => PENDING.includes(s);
@@ -89,6 +93,24 @@
     deactivate: (id, reason) => real.rpc('admin_deactivate_account', { p_user: id, p_reason: reason }),
     reactivate: (id, note) => real.rpc('admin_reactivate_account', { p_user: id, p_note: note || null }),
     unredeemKit: (id, reason) => real.rpc('admin_unredeem_kit', { p_kit: id, p_reason: reason }),
+    listAdmins: () => real.rpc('admin_list_admins'),
+    // A brand-new email has no sign-in yet: the admin-create-login Edge
+    // Function (admin-only, server-side) creates it, then we retry.
+    async addAdmin(email) {
+      try {
+        return await real.rpc('admin_add_admin', { p_email: email });
+      } catch (e) {
+        if ((e.message || '').trim() !== 'user_not_found') throw e;
+        const { error } = await sb.functions.invoke('admin-create-login', { body: { email } });
+        if (error) {
+          let code = 'create_failed';
+          try { code = (await error.context.json()).error || code; } catch (_) { /* keep default */ }
+          throw new Error(code);
+        }
+        return real.rpc('admin_add_admin', { p_email: email });
+      }
+    },
+    removeAdmin: (id) => real.rpc('admin_remove_admin', { p_user: id }),
   };
 
   // Demo mode (?demo): sample data only, nothing leaves the browser.
@@ -180,6 +202,10 @@
       return d ? { role: 'doctor', d } : null;
     };
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const admins = [
+      { user_id: 'demo-a0', email: 'demo@fogo.health', added_at: iso(30), last_sign_in_at: iso(0) },
+      { user_id: 'demo-a1', email: 'study.coordinator.long-address@fogo-research.example.org', added_at: iso(12), last_sign_in_at: iso(2) },
+    ];
     return {
       async listPatients() { await sleep(100); return patients.map(patientRow); },
       async listDoctorAccounts() {
@@ -260,6 +286,26 @@
       },
       async withdrawInvite(email) { const k = invites.findIndex((x) => x.email === email && !x.claimed_by); if (k < 0) throw new Error('invite_not_found_or_claimed'); invites.splice(k, 1); },
       async audit() { return audit.slice(); },
+      async listAdmins() {
+        await sleep(100);
+        return admins.map((a) => ({ ...a, is_self: a.email === 'demo@fogo.health' }));
+      },
+      async addAdmin(email) {
+        const e = email.trim().toLowerCase();
+        if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e)) throw new Error('invalid_email');
+        if (admins.some((a) => a.email === e)) throw new Error('already_admin');
+        const id = 'demo-a' + admins.length;
+        admins.push({ user_id: id, email: e, added_at: new Date().toISOString(), last_sign_in_at: null });
+        audit.unshift({ id: auditId++, at: new Date().toISOString(), table_name: 'admins', row_id: id, action: 'INSERT', actor_email: 'you (demo)', old_row: null, new_row: { email: e } });
+        return e;
+      },
+      async removeAdmin(id) {
+        const k = admins.findIndex((a) => a.user_id === id);
+        if (k < 0) throw new Error('admin_not_found');
+        if (admins[k].email === 'demo@fogo.health') throw new Error('cannot_remove_self');
+        const [a] = admins.splice(k, 1);
+        audit.unshift({ id: auditId++, at: new Date().toISOString(), table_name: 'admins', row_id: id, action: 'DELETE', actor_email: 'you (demo)', old_row: { email: a.email }, new_row: null });
+      },
     };
   })();
 
@@ -271,6 +317,7 @@
     doctors: [],
     stats: null,
     invites: [],
+    admins: [],
     audit: [],
     patients: [],
     doctorAccounts: [],
@@ -309,7 +356,7 @@
       if (!ok) {
         await sb.auth.signOut();
         showSignin();
-        setSigninError(`${email} isn’t an administrator. Ask an existing admin to add you (see admin/README.md).`);
+        setSigninError(`${email} isn’t an administrator. Ask an existing administrator to add you on the Administrators page.`);
         return;
       }
       showApp(email);
@@ -370,7 +417,7 @@
       }
     } catch (e) {
       const m = errMsg(e);
-      if (/signups not allowed|user not found/i.test(m)) setSigninError('No account exists for this email. Sign in to the app once first, then ask an admin to add you.', '#email');
+      if (/signups not allowed|user not found/i.test(m)) setSigninError('This email isn’t set up for the dashboard. Ask an administrator to add you on the Administrators page.', '#email');
       else if (/expired|invalid/i.test(m) && codeSentTo) setSigninError('That code is wrong or expired. Check the latest email or use a different email to resend.', '#code');
       else setSigninError(m);
     } finally {
@@ -414,6 +461,7 @@
         renderDoctors();
         renderInvites();
         await loadAccounts();
+        await loadAdmins();
         if (state.view === 'audit') await loadAudit();
         if (state.open) {
           const d = state.doctors.find((x) => x.id === state.open);
@@ -435,6 +483,11 @@
     if (failed) toast(`Accounts and kits couldn’t load: ${errMsg(failed.reason)} If the account migration (011) isn’t applied yet, apply it and refresh.`, 'error');
     renderAccounts();
   }
+  // Separate for the same reason: the other views keep working without migration 014.
+  async function loadAdmins() {
+    try { state.admins = await api.listAdmins() || []; } catch (e) { state.admins = null; }
+    renderAdmins();
+  }
   async function loadAudit() {
     try { state.audit = await api.audit() || []; renderAudit(); } catch (e) { toast(errMsg(e), 'error'); }
   }
@@ -447,6 +500,7 @@
     'doctor-accounts': ['Doctors', 'Doctor accounts and sign-in access. Deactivating ends all patient links.'],
     kits: ['Kits', 'Every kit and who claimed it. Unredeem a kit to let another patient claim it.'],
     audit: ['Audit Log', 'Every approval decision, account change and invite change, newest first.'],
+    admins: ['Administrators', 'People who can sign in to this dashboard. Every change is recorded in the audit log.'],
   };
 
   // URL holds view + list state so filters/search/page are shareable and survive reload:
@@ -511,7 +565,7 @@
   });
 
   // Off-canvas sidebar on narrow screens: inert while closed so Tab skips it.
-  const narrow = window.matchMedia('(max-width: 900px)');
+  const narrow = window.matchMedia('(max-width: 1024px)'); // matches the CSS off-canvas breakpoint
   function setSidebar(open) {
     $('#sidebar').classList.toggle('open', open);
     $('#side-scrim').classList.toggle('open', open);
@@ -968,6 +1022,73 @@
     };
   });
 
+  // ---------------------------------------------------------------- administrators
+  function renderAdmins() {
+    const tbody = $('#admin-rows');
+    if (!tbody) return;
+    $('#nav-admins').textContent = state.admins ? state.admins.length : '–';
+    if (state.admins === null) {
+      tbody.innerHTML = '<tr><td colspan="4" class="empty"><b>Couldn’t Load Administrators</b>Apply migration 014 (admin management) to this project, then refresh.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = state.admins.map((a) => `
+      <tr style="cursor:default">
+        <td><div class="doc-name admin-email">${esc(a.email)}</div>${a.is_self ? '<div class="doc-email">You</div>' : ''}</td>
+        <td class="muted">${fmtDate(a.added_at)}</td>
+        <td class="muted">${a.last_sign_in_at ? esc(ago(a.last_sign_in_at)) : 'Never'}</td>
+        <td style="text-align:right">${a.is_self ? '' : `<button class="btn sm danger" data-remove-admin="${esc(a.user_id)}" data-email="${esc(a.email)}" aria-label="Remove administrator ${esc(a.email)}">Remove</button>`}</td>
+      </tr>`).join('');
+    $$('#admin-rows [data-remove-admin]').forEach((b) => b.addEventListener('click', async () => {
+      const ok = await confirmModal({
+        title: 'Remove Administrator?',
+        body: `${b.dataset.email} will no longer be able to open this dashboard. Their other app account (if any) is not affected.`,
+        confirm: 'Remove',
+        kind: 'danger',
+      });
+      if (ok === null) return;
+      try { await busy(() => api.removeAdmin(b.dataset.removeAdmin)); toast('Administrator removed.'); await loadAdmins(); } catch (e) { toast(errMsg(e), 'error'); }
+    }));
+  }
+
+  $('#new-admin').addEventListener('click', () => {
+    const { root, close } = openModal(`
+        <form class="modal-card" autocomplete="off" novalidate>
+          <h3 id="modal-title">Add Administrator</h3>
+          <div class="muted">They can sign in here with a code sent to this email, and can do everything you can: manage doctors, patients, kits and other administrators.</div>
+          <div class="field"><label for="ad-email">Email</label><input id="ad-email" name="admin-email" type="email" autocomplete="off" spellcheck="false" placeholder="name@organisation.org" aria-describedby="ad-err"></div>
+          <div class="err hidden" id="ad-err" role="alert"></div>
+          <div class="modal-actions">
+            <button type="button" class="btn" data-x>Cancel</button>
+            <button type="submit" class="btn primary">${icon('plus')}<span>Add Administrator</span></button>
+          </div>
+        </form>`);
+    const input = root.querySelector('#ad-email');
+    const showErr = (msg) => {
+      const el = root.querySelector('#ad-err'); el.textContent = msg; el.classList.remove('hidden');
+      input.setAttribute('aria-invalid', 'true'); input.focus();
+    };
+    input.focus();
+    root.querySelector('form').onsubmit = async (e) => {
+      e.preventDefault();
+      const email = input.value.trim().toLowerCase();
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return showErr(ERRORS.invalid_email);
+      const btn = root.querySelector('button[type=submit]');
+      btn.disabled = true;
+      btn.lastElementChild.textContent = 'Adding…';
+      try {
+        await api.addAdmin(email);
+        close();
+        toast(`${email} is now an administrator.`);
+        await loadAdmins();
+        setView('admins');
+      } catch (err) {
+        showErr(errMsg(err));
+        btn.disabled = false;
+        btn.lastElementChild.textContent = 'Add Administrator';
+      }
+    };
+  });
+
   // ---------------------------------------------------------------- accounts (patients, doctors, kits)
   const ACCT = {
     patients: {
@@ -1124,6 +1245,8 @@
     if (a.action === 'account:reactivate') return 'Account Reactivated';
     if (a.action === 'kit:unredeem') return 'Kit Unredeemed';
     if (a.action === 'kit:release') return 'Kit Released by Patient';
+    if (a.table_name === 'admins' && a.action === 'INSERT') return 'Administrator Added';
+    if (a.table_name === 'admins' && a.action === 'DELETE') return 'Administrator Removed';
     if (a.table_name === 'doctor_verifications' && a.action === 'INSERT' && a.new_row?.status === 'approved') return 'Approved by Invitation';
     if (a.action.startsWith('verify:')) return ({ 'verify:approve': 'Approved', 'verify:reject': 'Rejected', 'verify:suspend': 'Suspended' })[a.action] || a.action;
     const t = { investigator_invites: 'Invite', doctor_verifications: 'Verification', doctors: 'Doctor', admins: 'Admin', account_status: 'Account', kits: 'Kit' }[a.table_name] || a.table_name;
@@ -1137,6 +1260,7 @@
   }
   const fmtVal = (v) => { if (v === null || v === undefined) return '∅'; const s = typeof v === 'object' ? JSON.stringify(v) : String(v); return s.length > 60 ? s.slice(0, 57) + '…' : s; };
   function recordName(a) {
+    if (a.table_name === 'admins') return a.new_row?.email || a.old_row?.email || a.row_id;
     const d = state.doctors.find((x) => x.id === a.row_id)
       || state.patients.find((x) => x.id === a.row_id)
       || state.doctorAccounts.find((x) => x.id === a.row_id);

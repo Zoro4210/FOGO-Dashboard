@@ -23,8 +23,8 @@ This repository is the deployable copy of the `admin/` folder in the main FOGO r
 
 ## Setup
 
-1. Apply migrations **009 through 013** (013 makes an invitation the verification) (main FOGO repository, `supabase/migrations/`) to the Supabase project, using the SQL editor or the Supabase MCP.
-2. Make yourself an admin. The account must already exist as an auth user, so sign in to the app once or create it under Authentication → Users.
+1. Apply migrations **009 through 014** (013 makes an invitation the verification, 014 adds admin management) from the main FOGO repository's `supabase/migrations/`, and deploy its `admin-create-login` Edge Function (`supabase/functions/`). Both are already live on the project.
+2. Make yourself the first admin (only needed once; after that, add admins from the dashboard). The account must already exist as an auth user, so sign in to the app once or create it under Authentication → Users.
    ```sql
    insert into public.admins (user_id, email)
    select id, email from auth.users where email = 'you@example.org';
@@ -56,9 +56,12 @@ The **Patients**, **Doctors** and **Kits** pages need migration 011. Patients re
 
 A deactivated doctor can't be approved until the account is reactivated.
 
-## Removing an admin
+## Administrators
 
-```sql
-delete from public.admins where email = 'someone@example.org';
-```
-This change is itself audited.
+Manage admins on the **Administrators** page (migration 014 and the `admin-create-login` Edge Function):
+
+- **Add Administrator** takes an email. If that email has never signed in anywhere, the Edge Function first creates a sign-in for it (server-side, admin-only); the person can then sign in here with an emailed code. New admins can do everything existing admins can.
+- **Remove** takes away dashboard access only; any app account they have is untouched. You can't remove yourself, so there is always at least one admin.
+- Both are recorded in the audit log ("Administrator Added" / "Administrator Removed").
+
+Only the very first admin has to be added in the SQL editor (step 2 of Setup).

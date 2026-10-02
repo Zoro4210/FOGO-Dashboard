@@ -92,7 +92,10 @@
   .sidebar-foot { margin-top: auto; border-top: 1px solid var(--line-soft); padding-top: 12px; display: grid; gap: 8px; }
   .who { display: flex; align-items: center; gap: 10px; padding: 4px 6px; }
   .avatar { width: 32px; height: 32px; border-radius: 50%; background: var(--primary-light); color: var(--primary-dark); display: grid; place-items: center; font-weight: 800; font-size: 13px; flex: none; }
-  .who-email { font-size: 12.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* Full email, wrapped onto a second line if needed (never cut off with …). */
+  .who-email { font-size: 12.5px; font-weight: 600; overflow-wrap: anywhere; line-height: 1.3; }
+  .admin-email { overflow-wrap: anywhere; }
+  .admins-table { min-width: 0; }
   .who-role { font-size: 11.5px; color: var(--ink-faint); }
   .trial-note { background: var(--warning-fill); color: var(--warning); border-radius: 12px; padding: 10px 12px; font-size: 12px; font-weight: 600; display: flex; gap: 8px; }
 
@@ -342,6 +345,7 @@
       <button class="nav-item" data-view="kits"><svg class="i" aria-hidden="true"><use href="#i-box"/></svg>Kits<span class="nav-count" id="nav-kits" aria-label="claimed">0</span></button>
       <div class="nav-label">Records</div>
       <button class="nav-item" data-view="audit"><svg class="i" aria-hidden="true"><use href="#i-history"/></svg>Audit Log</button>
+      <button class="nav-item" data-view="admins"><svg class="i" aria-hidden="true"><use href="#i-shield"/></svg>Administrators<span class="nav-count" id="nav-admins" aria-label="administrators">0</span></button>
     </nav>
     <div class="sidebar-foot">
       <div class="trial-note"><svg class="i" aria-hidden="true"><use href="#i-info"/></svg><span>Decisions are recorded in the audit log with your account.</span></div>
@@ -399,6 +403,23 @@
             <caption class="sr-only">Investigator invites</caption>
             <thead><tr><th scope="col">Invitee</th><th scope="col">NMC / Registration</th><th scope="col">Site</th><th scope="col">Invited</th><th scope="col">Signed Up</th><th scope="col">Status</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
             <tbody id="invite-rows"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- Administrators view -->
+    <section id="view-admins" class="view hidden" style="display:grid;gap:18px" aria-labelledby="page-title">
+      <div class="toolbar">
+        <div class="muted" style="flex:1;min-width:220px">New administrators sign in with a code sent to their email. You can’t remove yourself.</div>
+        <button class="btn primary" id="new-admin"><svg class="i" aria-hidden="true"><use href="#i-plus"/></svg>Add Administrator</button>
+      </div>
+      <div class="table-card">
+        <div class="table-scroll">
+          <table class="admins-table">
+            <caption class="sr-only">Dashboard administrators</caption>
+            <thead><tr><th scope="col">Email</th><th scope="col">Added</th><th scope="col">Last Sign-In</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
+            <tbody id="admin-rows"></tbody>
           </table>
         </div>
       </div>
