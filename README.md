@@ -1,13 +1,15 @@
 # FOGO Admin Dashboard
 
-This is a static web page where administrators verify doctor sign-ups. Here is how verification works:
+This is a static web page where administrators invite doctors and manage their access. The invitation is the verification:
 
-1. An admin invites a doctor's email.
+1. An admin invites a doctor with their email, full name and medical council (NMC) registration number, on the **Invites** page.
 2. The doctor signs up in the app with that email.
-3. The doctor uploads a registration certificate.
-4. An admin opens the certificate here and approves or rejects it.
+3. They are **Active** immediately (`Approved by invitation`). No document is uploaded or reviewed.
+4. An admin can **Suspend** an active doctor at any time (a reason is required) and **Reinstate** them later.
 
-A doctor sees no patient data until they are approved. The database enforces this with `doctors.verified`, not just the UI. Every decision is written to `audit_log` with the admin's account.
+Doctors who signed up without an invitation (legacy sign-ups) show as **Pending Approval**. An admin can approve them or reject them (a reason is required). Old certificate uploads are kept in storage as evidence but are no longer shown here.
+
+A doctor sees no patient data unless they are Active. The database enforces this with `doctors.verified`, not just the UI. Every decision is written to `audit_log` with the admin's account. An invitation-approved sign-up appears there as **Approved by Invitation**.
 
 The page is `index.html` plus `app.js`. It loads supabase-js (pinned version, integrity-checked) from jsDelivr and calls the `admin_*` RPCs from `supabase/migrations/`.
 
@@ -21,7 +23,7 @@ This repository is the deployable copy of the `admin/` folder in the main FOGO r
 
 ## Setup
 
-1. Apply migrations **009 through 012** (main FOGO repository, `supabase/migrations/`) to the Supabase project, using the SQL editor or the Supabase MCP.
+1. Apply migrations **009 through 013** (013 makes an invitation the verification) (main FOGO repository, `supabase/migrations/`) to the Supabase project, using the SQL editor or the Supabase MCP.
 2. Make yourself an admin. The account must already exist as an auth user, so sign in to the app once or create it under Authentication → Users.
    ```sql
    insert into public.admins (user_id, email)
@@ -49,7 +51,7 @@ Any other static host works too: deploy only `index.html`, `app.js` and a `confi
 The **Patients**, **Doctors** and **Kits** pages need migration 011. Patients removing a damaged kit from the app (migration 012) show in the audit log as **Kit Released by Patient**. Because this is a CDSCO trial, nothing clinical is ever hard-deleted: removing an account means deactivating it.
 
 - **Deactivate** (a reason is required, and the action is audited) blocks sign-in and ends all pending and active doctor links. A doctor is also marked unverified. A patient's claimed kits are released. All sessions, episodes, notes and consent records are kept. You can't deactivate your own account.
-- **Reactivate** lifts the sign-in block. It does not restore links or kits. A doctor regains access only if their verification status is still Approved.
+- **Reactivate** lifts the sign-in block. It does not restore links or kits. A doctor regains access only if their status is still Active.
 - **Unredeem** (kits, a reason is required, and the action is audited) clears the claim so another patient can claim the kit. Past sessions stay with the original patient.
 
 A deactivated doctor can't be approved until the account is reactivated.

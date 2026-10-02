@@ -22,9 +22,9 @@
     return fmtDate(v);
   };
   const STATUS = {
-    submitted: 'Pending Review',
-    awaiting_document: 'Awaiting Document',
-    approved: 'Approved',
+    submitted: 'Pending Approval',
+    awaiting_document: 'Pending Approval',
+    approved: 'Active',
     rejected: 'Rejected',
     suspended: 'Suspended',
   };
@@ -32,7 +32,7 @@
   const ERRORS = {
     not_admin: 'This account isn’t an administrator. Ask an existing admin to add you.',
     note_required: 'Write a reason first. The doctor sees it in the app.',
-    invalid_transition: 'That action isn’t possible for this status anymore. Refresh and try again.',
+    invalid_transition: 'That action isn’t possible for this doctor’s current status. Refresh and try again.',
     cannot_review_self: 'You can’t review your own doctor account. Ask another admin.',
     invite_exists: 'This email already has an invite. Check the Invites page.',
     invalid_email: 'Enter a valid email address, e.g. dr.name@hospital.org.',
@@ -49,6 +49,8 @@
     kit_not_claimed: 'This kit isn’t claimed anymore. Refresh the list.',
     account_deactivated: 'This doctor’s account is deactivated. Reactivate it on the Doctors page before approving.',
   };
+  const PENDING = ['submitted', 'awaiting_document'];
+  const isPending = (s) => PENDING.includes(s);
   const errMsg = (e) => {
     const m = (e && (e.message || e.error_description || e.msg)) || String(e);
     return ERRORS[m.trim()] || m;
@@ -87,11 +89,6 @@
     deactivate: (id, reason) => real.rpc('admin_deactivate_account', { p_user: id, p_reason: reason }),
     reactivate: (id, note) => real.rpc('admin_reactivate_account', { p_user: id, p_note: note || null }),
     unredeemKit: (id, reason) => real.rpc('admin_unredeem_kit', { p_kit: id, p_reason: reason }),
-    async signedUrl(path) {
-      const { data, error } = await sb.storage.from('doctor-documents').createSignedUrl(path, 600);
-      if (error) throw error;
-      return data.signedUrl;
-    },
   };
 
   // Demo mode (?demo): sample data only, nothing leaves the browser.
@@ -112,30 +109,35 @@
       ['Dr. Ishita Sen', 'Neurology', 'Kalinga Hospital', 'OMC-42210'],
       ['Dr. Abhay Jena', 'Neurosurgery', 'AIIMS Bhubaneswar', 'OMC-37555'],
     ];
-    const statuses = ['submitted', 'submitted', 'submitted', 'approved', 'awaiting_document', 'approved', 'rejected', 'submitted', 'approved', 'awaiting_document', 'suspended', 'approved'];
+    // Invited doctors are approved on sign-up (migration 013). One legacy doctor
+    // who was never invited is still pending, and one has been suspended.
+    const statuses = ['approved', 'approved', 'approved', 'approved', 'awaiting_document', 'approved', 'approved', 'approved', 'approved', 'approved', 'suspended', 'approved'];
     const doctors = names.map(([n, sp, site, nmc], i) => {
       const st = statuses[i];
-      const reviewed = ['approved', 'rejected', 'suspended'].includes(st);
+      const legacy = st === 'awaiting_document';
+      const byInvite = !legacy && st === 'approved';
+      const reviewed = !legacy;
       return {
         id: `demo-${i}`, full_name: n, email: n.replace(/^Dr\. /, '').toLowerCase().replace(/\s+/g, '.') + '@hospital.org',
-        phone: null, clinic: site, specialty: sp, nmc_registration: nmc, invite_site: site, invited_at: iso(20 - i),
+        phone: null, clinic: site, specialty: sp, nmc_registration: nmc, invite_site: legacy ? null : site, invited_at: legacy ? null : iso(20 - i),
         public_code: 'DR-' + 'ABCDEFGHJKMN'[i] + '7Q4X', verified: st === 'approved', status: st,
-        document_path: st === 'awaiting_document' ? null : `demo-${i}/cert.jpg`,
-        submitted_at: st === 'awaiting_document' ? null : iso(i * 0.7 + 0.2),
-        reviewed_at: reviewed ? iso(i * 0.3) : null, reviewed_by_email: reviewed ? 'admin@fogo.health' : null,
-        review_note: st === 'rejected' ? 'Certificate photo is blurred; registration number unreadable.' : st === 'suspended' ? 'Registration lapsed per state council.' : null,
+        document_path: null, submitted_at: null,
+        reviewed_at: reviewed ? iso(18 - i) : null, reviewed_by_email: st === 'suspended' ? 'admin@fogo.health' : null,
+        review_note: byInvite ? 'Approved by invitation' : st === 'suspended' ? 'Registration lapsed per state council.' : null,
         created_at: iso(18 - i), active_patients: st === 'approved' ? (i % 4) + 1 : 0,
       };
     });
-    const invites = doctors.map((d) => ({ email: d.email, full_name: d.full_name, nmc_registration: d.nmc_registration, site: d.invite_site, invited_at: d.invited_at, claimed_by: d.id, claimed_at: d.created_at, status: d.status }))
+    const invites = doctors.filter((d) => d.invited_at).map((d) => ({ email: d.email, full_name: d.full_name, nmc_registration: d.nmc_registration, site: d.invite_site, invited_at: d.invited_at, claimed_by: d.id, claimed_at: d.created_at, status: d.status }))
       .concat([{ email: 'dr.tanvi.ghosh@hospital.org', full_name: 'Dr. Tanvi Ghosh', nmc_registration: 'WBMC-61200', site: 'AIIMS Bhubaneswar', invited_at: iso(1), claimed_by: null, claimed_at: null, status: null }]);
     const audit = [];
     let auditId = 100;
     const pushAudit = (action, row, oldRow, newRow) => audit.unshift({ id: auditId++, at: new Date().toISOString(), table_name: 'doctor_verifications', row_id: row, action, actor_email: 'you (demo)', old_row: oldRow, new_row: newRow });
-    doctors.filter((d) => d.reviewed_at).forEach((d) => audit.push({ id: auditId++, at: d.reviewed_at, table_name: 'doctor_verifications', row_id: d.id, action: 'verify:' + ({ approved: 'approve', rejected: 'reject', suspended: 'suspend' }[d.status]), actor_email: 'admin@fogo.health', old_row: { status: 'submitted' }, new_row: { status: d.status, review_note: d.review_note } }));
+    // Invitation-approved signups are doctor_verifications INSERT rows already approved.
+    doctors.filter((d) => d.status === 'approved' && d.reviewed_at).forEach((d) => audit.push({ id: auditId++, at: d.reviewed_at, table_name: 'doctor_verifications', row_id: d.id, action: 'INSERT', actor_email: null, old_row: null, new_row: { status: 'approved', review_note: 'Approved by invitation' } }));
+    doctors.filter((d) => d.status === 'suspended').forEach((d) => audit.push({ id: auditId++, at: iso(4), table_name: 'doctor_verifications', row_id: d.id, action: 'verify:suspend', actor_email: 'admin@fogo.health', old_row: { status: 'approved' }, new_row: { status: 'suspended', review_note: d.review_note } }));
     const stats = () => {
       const c = (s) => doctors.filter((d) => d.status === s).length;
-      return { submitted: c('submitted'), awaiting_document: c('awaiting_document'), approved: c('approved'), rejected: c('rejected'), suspended: c('suspended'), total: doctors.length, submitted_7d: 5, signed_up_7d: 4, approved_7d: 2, rejected_7d: 1, invites_open: invites.filter((i) => !i.claimed_by).length };
+      return { submitted: c('submitted'), awaiting_document: c('awaiting_document'), approved: c('approved'), rejected: c('rejected'), suspended: c('suspended'), total: doctors.length, signed_up_7d: 4, approved_7d: 4, rejected_7d: 0, invites_open: invites.filter((i) => !i.claimed_by).length };
     };
     // Account administration sample data (in-memory only).
     const pat = (i, name, phone, doc, link, sessions, lastDays, joined) => ({
@@ -239,8 +241,11 @@
       async stats() { return stats(); },
       async review(id, decision, note) {
         const d = doctors.find((x) => x.id === id);
+        if (!d) throw new Error('doctor_not_found');
         if (decision === 'approve' && docDeact[id]) throw new Error('account_deactivated');
         if ((decision === 'reject' || decision === 'suspend') && !(note || '').trim()) throw new Error('note_required');
+        const from = { approve: ['awaiting_document', 'submitted', 'rejected', 'suspended'], reject: ['awaiting_document', 'submitted'], suspend: ['approved', 'submitted'] }[decision];
+        if (!from || !from.includes(d.status)) throw new Error('invalid_transition');
         const old = { status: d.status };
         d.status = { approve: 'approved', reject: 'rejected', suspend: 'suspended' }[decision];
         d.verified = d.status === 'approved'; d.reviewed_at = new Date().toISOString(); d.reviewed_by_email = 'you (demo)'; d.review_note = note || null;
@@ -255,11 +260,6 @@
       },
       async withdrawInvite(email) { const k = invites.findIndex((x) => x.email === email && !x.claimed_by); if (k < 0) throw new Error('invite_not_found_or_claimed'); invites.splice(k, 1); },
       async audit() { return audit.slice(); },
-      async signedUrl(path) {
-        const i = Number(path.split('/')[0].split('-')[1]) || 0;
-        const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='640' height='440'><rect width='640' height='440' fill='#fffdf6'/><rect x='18' y='18' width='604' height='404' fill='none' stroke='#0B5E75' stroke-width='4'/><text x='320' y='90' font-family='Georgia' font-size='26' text-anchor='middle' fill='#073D4C'>STATE MEDICAL COUNCIL</text><text x='320' y='130' font-family='Georgia' font-size='18' text-anchor='middle' fill='#3E4C59'>Certificate of Registration</text><text x='320' y='210' font-family='Georgia' font-size='28' text-anchor='middle' fill='#1B2733'>${esc(doctors[i].full_name)}</text><text x='320' y='260' font-family='monospace' font-size='20' text-anchor='middle' fill='#1B2733'>Reg. No. ${esc(doctors[i].nmc_registration)}</text><text x='320' y='380' font-family='sans-serif' font-size='14' text-anchor='middle' fill='#B3261E'>SAMPLE — DEMO DATA</text></svg>`;
-        return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
-      },
     };
   })();
 
@@ -276,7 +276,7 @@
     doctorAccounts: [],
     kits: [],
     acctFilter: { patients: 'active', 'doctor-accounts': 'active', kits: 'all' },
-    filter: 'submitted',
+    filter: 'all',
     query: '',
     sortDesc: true,
     page: 1,
@@ -441,12 +441,12 @@
 
   // ---------------------------------------------------------------- views
   const VIEWS = {
-    doctors: ['Doctor Verification', 'Review registration certificates before doctors can see patient data.'],
-    invites: ['Investigator Invites', 'Only invited emails can create a doctor account.'],
+    doctors: ['Doctor Access','Invited doctors are active as soon as they sign up. Suspend access or approve legacy sign-ups here.'],
+    invites: ['Investigator Invites', 'Your invitation is the verification: the doctor is active as soon as they sign up with the invited email.'],
     patients: ['Patients', 'Patient accounts, kits and doctor links. Deactivating keeps all clinical data.'],
     'doctor-accounts': ['Doctors', 'Doctor accounts and sign-in access. Deactivating ends all patient links.'],
     kits: ['Kits', 'Every kit and who claimed it. Unredeem a kit to let another patient claim it.'],
-    audit: ['Audit Log', 'Every verification decision, account change and invite change, newest first.'],
+    audit: ['Audit Log', 'Every approval decision, account change and invite change, newest first.'],
   };
 
   // URL holds view + list state so filters/search/page are shareable and survive reload:
@@ -457,7 +457,7 @@
     state.view = VIEWS[v] ? v : 'doctors';
     const st = p.get('status');
     if (ACCT[state.view]) state.acctFilter[state.view] = ACCT[state.view].filters.some(([k]) => k === st) ? st : ACCT[state.view].def;
-    else state.filter = FILTERS.some(([k]) => k === st) ? st : 'submitted';
+    else state.filter = isPending(st) ? 'pending' : FILTERS.some(([k]) => k === st) ? st : 'all';
     state.query = p.get('q') || '';
     state.page = Math.max(1, Number(p.get('page')) || 1);
     state.sortDesc = p.get('sort') !== 'asc';
@@ -468,7 +468,7 @@
   function writeUrl() {
     const p = new URLSearchParams();
     if (state.view === 'doctors') {
-      if (state.filter !== 'submitted') p.set('status', state.filter);
+      if (state.filter !== 'all') p.set('status', state.filter);
       if (state.query) p.set('q', state.query);
       if (state.page > 1) p.set('page', state.page);
       if (!state.sortDesc) p.set('sort', 'asc');
@@ -526,44 +526,47 @@
 
   // ---------------------------------------------------------------- doctors
   const FILTERS = [
-    ['submitted', 'Pending Review'],
-    ['awaiting_document', 'Awaiting Document'],
-    ['approved', 'Approved'],
-    ['rejected', 'Rejected'],
-    ['suspended', 'Suspended'],
     ['all', 'All'],
+    ['approved', 'Active'],
+    ['pending', 'Pending Approval'],
+    ['suspended', 'Suspended'],
+    ['rejected', 'Rejected'],
   ];
+  // Filter key a doctor's status falls under (both legacy pending statuses share one chip).
+  const filterKey = (status) => isPending(status) ? 'pending' : status;
 
   function filteredDoctors() {
     const q = state.query.trim().toLowerCase();
-    let rows = state.doctors.filter((d) => state.filter === 'all' || d.status === state.filter);
+    let rows = state.doctors.filter((d) => state.filter === 'all' || filterKey(d.status) === state.filter);
     if (q) rows = rows.filter((d) => [d.full_name, d.email, d.nmc_registration, d.clinic, d.invite_site, d.public_code].some((v) => (v || '').toLowerCase().includes(q)));
-    const key = (d) => new Date(d.submitted_at || d.created_at || 0).getTime();
+    const key = (d) => new Date(d.created_at || 0).getTime();
     rows.sort((a, b) => state.sortDesc ? key(b) - key(a) : key(a) - key(b));
     return rows;
   }
 
   function renderStats() {
     const s = state.stats || {};
+    const pending = (s.submitted ?? 0) + (s.awaiting_document ?? 0);
     const cells = [
-      ['clock', 'Pending Review', s.submitted ?? 0, `${nf.format(s.submitted_7d ?? 0)} submitted`],
-      ['file', 'Awaiting Document', s.awaiting_document ?? 0, `${nf.format(s.signed_up_7d ?? 0)} signed up`],
-      ['shield', 'Approved Doctors', s.approved ?? 0, `${nf.format(s.approved_7d ?? 0)} approved`],
-      ['ban', 'Rejected / Suspended', (s.rejected ?? 0) + (s.suspended ?? 0), `${nf.format(s.rejected_7d ?? 0)} decided`],
+      ['shield', 'Active Doctors', s.approved ?? 0, 'Total', `${nf.format(s.approved_7d ?? 0)} approved`],
+      ['clock', 'Pending Approval', pending, 'Legacy sign-ups', 'need a decision'],
+      ['ban', 'Suspended', s.suspended ?? 0, 'Total', 'access blocked'],
+      ['mail', 'Open Invites', s.invites_open ?? 0, 'Not signed up yet', 'waiting'],
+      ['user', 'Signed Up', s.signed_up_7d ?? 0, 'Last 7 days', 'new doctors'],
     ];
-    $('#stats').innerHTML = cells.map(([ic, label, value, delta]) => `
+    $('#stats').innerHTML = cells.map(([ic, label, value, foot, delta]) => `
       <div class="stat" role="group" aria-label="${esc(label)}">
         <div class="stat-label">${icon(ic)}${esc(label)}</div>
         <div class="stat-value mono">${esc(nf.format(value))}</div>
-        <div class="stat-foot">Last 7 days <span class="delta">${esc(delta)}</span></div>
+        <div class="stat-foot">${esc(foot)} <span class="delta">${esc(delta)}</span></div>
       </div>`).join('');
-    $('#nav-pending').textContent = s.submitted ?? 0;
+    $('#nav-pending').textContent = pending;
     $('#nav-invites').textContent = s.invites_open ?? 0;
   }
 
   function renderChips() {
     const counts = {};
-    state.doctors.forEach((d) => { counts[d.status] = (counts[d.status] || 0) + 1; });
+    state.doctors.forEach((d) => { const k = filterKey(d.status); counts[k] = (counts[k] || 0) + 1; });
     $('#status-chips').innerHTML = FILTERS.map(([k, label]) => `
       <button class="chip ${state.filter === k ? 'active' : ''}" data-filter="${k}" aria-pressed="${state.filter === k}">${esc(label)}<span class="n mono">${k === 'all' ? state.doctors.length : (counts[k] || 0)}</span></button>`).join('');
     $$('#status-chips .chip').forEach((c) => c.addEventListener('click', () => {
@@ -582,7 +585,7 @@
     const tbody = $('#doctor-rows');
     if (!pageRows.length) {
       const label = FILTERS.find(([k]) => k === state.filter)?.[1].toLowerCase();
-      tbody.innerHTML = `<tr class="empty-row"><td colspan="8" class="empty"><b>Nothing Here</b>${state.query ? 'No doctors match your search. Try a name, email or registration number.' : `No doctors are ${esc(label)} right now.`}</td></tr>`;
+      tbody.innerHTML = `<tr class="empty-row"><td colspan="7" class="empty"><b>Nothing Here</b>${state.query ? 'No doctors match your search. Try a name, email or registration number.' : state.filter === 'all' ? 'No doctors have signed up yet. Use “Invite Doctor” to invite the first one.' : `No doctors are ${esc(label)} right now.`}</td></tr>`;
     } else {
       tbody.innerHTML = pageRows.map((d) => `
         <tr data-id="${esc(d.id)}" class="${state.selected.has(d.id) ? 'selected' : ''}" tabindex="0" aria-label="Review ${esc(d.full_name)}, ${esc(STATUS[d.status] || d.status)}">
@@ -591,9 +594,8 @@
           <td class="mono" translate="no">${esc(d.nmc_registration || '—')}</td>
           <td>${esc(d.invite_site || d.clinic || '—')}<div class="doc-email">${esc(d.specialty || '')}</div></td>
           <td class="muted">${fmtDate(d.invited_at)}</td>
-          <td class="muted" title="${esc(fmtDateTime(d.submitted_at))}">${ago(d.submitted_at)}</td>
+          <td class="muted" title="${esc(fmtDateTime(d.created_at))}">${ago(d.created_at)}</td>
           <td>${pill(d.status)}</td>
-          <td>${d.document_path ? `<span class="doc-link">${icon('file')}View</span>` : '<span class="muted">—</span>'}</td>
         </tr>`).join('');
     }
     $$('#doctor-rows tr[data-id]').forEach((tr) => {
@@ -659,7 +661,7 @@
     renderDoctors();
   });
   $('#export-btn').addEventListener('click', () => {
-    const cols = ['full_name', 'email', 'phone', 'nmc_registration', 'invite_site', 'clinic', 'specialty', 'public_code', 'status', 'invited_at', 'submitted_at', 'reviewed_at', 'reviewed_by_email', 'review_note'];
+    const cols = ['full_name', 'email', 'phone', 'nmc_registration', 'invite_site', 'clinic', 'specialty', 'public_code', 'status', 'invited_at', 'created_at', 'reviewed_at', 'reviewed_by_email', 'review_note'];
     const csvCell = (v) => { const s = String(v ?? ''); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
     const csv = [cols.join(','), ...filteredDoctors().map((d) => cols.map((c) => csvCell(d[c])).join(','))].join('\n');
     const a = document.createElement('a');
@@ -683,15 +685,15 @@
     const ids = [...state.selected];
     const docs = ids.map((id) => state.doctors.find((d) => d.id === id)).filter(Boolean);
     const eligible = docs.filter((d) => decision === 'approve'
-      ? ['submitted', 'rejected', 'suspended'].includes(d.status) && d.document_path
-      : d.status === 'submitted');
+      ? [...PENDING, 'rejected', 'suspended'].includes(d.status)
+      : isPending(d.status));
     const skipped = docs.length - eligible.length;
     if (!eligible.length) { toast(`None of the selected doctors can be ${decision === 'approve' ? 'approved' : 'rejected'}.`, 'error'); return; }
     const note = await confirmModal({
       title: decision === 'approve' ? `Approve ${eligible.length} doctor${eligible.length > 1 ? 's' : ''}?` : `Reject ${eligible.length} doctor${eligible.length > 1 ? 's' : ''}?`,
       body: (decision === 'approve'
-        ? 'They will immediately be able to link with patients and see their data. Make sure you have opened each certificate.'
-        : 'They will see your reason and can upload a new document.') + (skipped ? ` ${skipped} selected doctor${skipped > 1 ? 's are' : ' is'} not eligible and will be skipped.` : ''),
+        ? 'They will immediately be able to link with patients and see their data.'
+        : 'They will see your reason and will not be able to see patient data.') + (skipped ? ` ${skipped} selected doctor${skipped > 1 ? 's are' : ' is'} not eligible and will be skipped.` : ''),
       needNote: decision === 'reject',
       confirm: `${decision === 'approve' ? 'Approve' : 'Reject'} ${eligible.length} Doctor${eligible.length > 1 ? 's' : ''}`,
       kind: decision === 'approve' ? 'approve' : 'danger',
@@ -709,7 +711,6 @@
   }
 
   // ---------------------------------------------------------------- drawer
-  let previewToken = 0;
   let drawerReturnFocus = null;
   function openDrawer(id) {
     const d = state.doctors.find((x) => x.id === id);
@@ -717,7 +718,7 @@
     drawerReturnFocus = document.activeElement;
     state.open = id;
     state.pendingAction = null;
-    renderDrawer(d, true);
+    renderDrawer(d);
     const drawer = $('#drawer');
     drawer.inert = false;
     drawer.classList.add('open');
@@ -745,7 +746,7 @@
   $('#drawer-close').addEventListener('click', closeDrawer);
   $('#drawer-scrim').addEventListener('click', closeDrawer);
 
-  function renderDrawer(d, reloadPreview) {
+  function renderDrawer(d) {
     $('#d-name').textContent = d.full_name;
     $('#d-email').textContent = d.email || d.phone || '';
     const st = $('#d-status');
@@ -760,45 +761,21 @@
       ['Doctor ID', d.public_code, true],
       ['Invited', fmtDateTime(d.invited_at)],
       ['Signed Up', fmtDateTime(d.created_at)],
-      ['Document Submitted', fmtDateTime(d.submitted_at)],
       ['Active Patients', nf.format(d.active_patients ?? 0)],
     ];
     $('#d-details').innerHTML = rows.map(([k, v, code]) => `<dt>${esc(k)}</dt><dd class="${code ? 'mono' : ''}" ${code ? 'translate="no"' : ''}>${esc(v ?? '—') || '—'}</dd>`).join('');
     $('#d-history').innerHTML = d.reviewed_at
-      ? `${pill(d.status)} by <b>${esc(d.reviewed_by_email || 'unknown')}</b> · ${esc(fmtDateTime(d.reviewed_at))}${d.review_note ? `<div style="margin-top:8px;overflow-wrap:anywhere">“${esc(d.review_note)}”</div>` : ''}`
-      : '<span class="muted">Not reviewed yet.</span>';
+      ? `${pill(d.status)} by <b>${esc(d.reviewed_by_email || (d.status === 'approved' ? 'invitation' : 'unknown'))}</b> · ${esc(fmtDateTime(d.reviewed_at))}${d.review_note ? `<div style="margin-top:8px;overflow-wrap:anywhere">“${esc(d.review_note)}”</div>` : ''}`
+      : '<span class="muted">Not decided yet. This doctor was not invited and is waiting for approval.</span>';
 
-    if (reloadPreview) loadPreview(d);
     renderActions(d);
-  }
-
-  async function loadPreview(d) {
-    const box = $('#d-preview');
-    const open = $('#d-open');
-    open.innerHTML = '';
-    if (!d.document_path) { box.innerHTML = '<div class="ph">The doctor has not uploaded a document yet.</div>'; return; }
-    const token = ++previewToken;
-    box.innerHTML = '<div class="ph">Loading document…</div>';
-    try {
-      const url = await api.signedUrl(d.document_path);
-      if (token !== previewToken) return;
-      const isPdf = /\.pdf$/i.test(d.document_path);
-      box.innerHTML = isPdf
-        ? `<iframe src="${esc(url)}" title="Registration certificate of ${esc(d.full_name)}"></iframe>`
-        : `<img src="${esc(url)}" alt="Registration certificate of ${esc(d.full_name)}" width="640" height="440" decoding="async" style="width:auto;height:auto">`;
-      open.innerHTML = `<a class="doc-link" href="${esc(url)}" target="_blank" rel="noopener">${icon('external')}Open Full Size</a> <span class="hint">· Link expires in 10&nbsp;minutes</span>`;
-      const img = box.querySelector('img');
-      if (img) img.onerror = () => { box.innerHTML = '<div class="ph">This file type can’t be previewed here (e.g. HEIC). Use “Open Full Size” below.</div>'; };
-    } catch (e) {
-      if (token === previewToken) box.innerHTML = `<div class="ph">Couldn’t load the document: ${esc(errMsg(e))}. Close and reopen the panel to retry.</div>`;
-    }
   }
 
   function renderActions(d) {
     const actions = [];
-    if (['submitted', 'rejected', 'suspended'].includes(d.status) && d.document_path) actions.push(['approve', d.status === 'suspended' ? 'Reinstate' : 'Approve', 'approve', 'check']);
-    if (d.status === 'submitted') actions.push(['reject', 'Reject', 'danger', 'x']);
-    if (['approved', 'submitted'].includes(d.status)) actions.push(['suspend', 'Suspend', 'danger', 'ban']);
+    if (isPending(d.status) || ['rejected', 'suspended'].includes(d.status)) actions.push(['approve', d.status === 'suspended' ? 'Reinstate' : 'Approve', 'approve', 'check']);
+    if (isPending(d.status)) actions.push(['reject', 'Reject', 'danger', 'x']);
+    if (d.status === 'approved' || d.status === 'submitted') actions.push(['suspend', 'Suspend', 'danger', 'ban']);
     const pending = state.pendingAction;
     const noteField = $('#d-note-field');
     noteField.classList.toggle('hidden', !(pending === 'reject' || pending === 'suspend'));
@@ -824,7 +801,9 @@
       if (act === 'approve') {
         const ok = await confirmModal({
           title: `${d.status === 'suspended' ? 'Reinstate' : 'Approve'} ${d.full_name}?`,
-          body: 'They’ll immediately be able to link with patients and see their data. Make sure you’ve checked the certificate.',
+          body: d.status === 'suspended'
+            ? 'Their access is restored and they can link with patients and see their data again.'
+            : 'They’ll immediately be able to link with patients and see their data. They were not invited, so check who they are first.',
           confirm: d.status === 'suspended' ? 'Reinstate Doctor' : 'Approve Doctor',
           kind: 'approve',
         });
@@ -893,7 +872,7 @@
           <form class="modal-card" novalidate>
             <h3 id="modal-title">${esc(title)}</h3>
             <div class="muted">${esc(body)}</div>
-            ${hasNote ? `<div class="field"><label for="m-note">${esc(noteLabel || 'Reason (shown to the doctors)')}</label><textarea id="m-note" name="review-note" rows="3" maxlength="1000" autocomplete="off" placeholder="${esc(notePlaceholder || 'e.g. Certificate is blurred, please upload a clearer photo…')}" aria-describedby="m-err"></textarea><div class="err hidden" id="m-err" role="alert"></div></div>` : ''}
+            ${hasNote ? `<div class="field"><label for="m-note">${esc(noteLabel || 'Reason (shown to the doctors)')}</label><textarea id="m-note" name="review-note" rows="3" maxlength="1000" autocomplete="off" placeholder="${esc(notePlaceholder || 'e.g. Registration number could not be confirmed…')}" aria-describedby="m-err"></textarea><div class="err hidden" id="m-err" role="alert"></div></div>` : ''}
             <div class="modal-actions">
               <button type="button" class="btn" data-x>Cancel</button>
               <button type="submit" class="btn ${kind === 'approve' ? 'approve' : 'danger-solid'}">${esc(confirmLabel)}</button>
@@ -947,7 +926,7 @@
     const { root, close } = openModal(`
         <form class="modal-card" autocomplete="off" novalidate>
           <h3 id="modal-title">Invite a Doctor</h3>
-          <div class="muted">They sign up in the app with this email, then upload their registration certificate for you to review.</div>
+          <div class="muted">The doctor gets access as soon as they sign up with this email. Check the registration number first: the invitation is the verification.</div>
           <div class="field"><label for="iv-email">Email</label><input id="iv-email" name="invite-email" type="email" autocomplete="off" spellcheck="false" placeholder="dr.name@hospital.org" aria-describedby="iv-err"></div>
           <div class="field"><label for="iv-name">Full Name</label><input id="iv-name" name="invite-name" autocomplete="off" placeholder="Dr. Full Name…" aria-describedby="iv-err"></div>
           <div class="field"><label for="iv-nmc">Medical Council Registration No.</label><input id="iv-nmc" name="invite-registration" autocomplete="off" spellcheck="false" placeholder="e.g. OMC-12345…" aria-describedby="iv-err" translate="no"></div>
@@ -1112,7 +1091,7 @@
     const name = r.full_name || r.email || `this ${role}`;
     const note = await confirmModal({
       title: `Reactivate ${name}?`,
-      body: `They can sign in again. Doctor links and kits are not restored.${role === 'doctor' ? ' They regain access to patient data only if their verification is approved.' : ''}`,
+      body: `They can sign in again. Doctor links and kits are not restored.${role === 'doctor' ? ' They regain access to patient data only if their status is Active.' : ''}`,
       optionalNote: true, noteLabel: 'Note (optional, kept in the audit log)', notePlaceholder: 'e.g. Returned to the study…',
       confirm: `Reactivate ${role === 'patient' ? 'Patient' : 'Doctor'}`, kind: 'approve',
     });
@@ -1145,6 +1124,7 @@
     if (a.action === 'account:reactivate') return 'Account Reactivated';
     if (a.action === 'kit:unredeem') return 'Kit Unredeemed';
     if (a.action === 'kit:release') return 'Kit Released by Patient';
+    if (a.table_name === 'doctor_verifications' && a.action === 'INSERT' && a.new_row?.status === 'approved') return 'Approved by Invitation';
     if (a.action.startsWith('verify:')) return ({ 'verify:approve': 'Approved', 'verify:reject': 'Rejected', 'verify:suspend': 'Suspended' })[a.action] || a.action;
     const t = { investigator_invites: 'Invite', doctor_verifications: 'Verification', doctors: 'Doctor', admins: 'Admin', account_status: 'Account', kits: 'Kit' }[a.table_name] || a.table_name;
     return `${t} ${({ INSERT: 'created', UPDATE: 'changed', DELETE: 'deleted' })[a.action] || a.action.toLowerCase()}`;
@@ -1170,6 +1150,7 @@
     tbody.innerHTML = state.audit.map((a) => {
       const verify = a.action.startsWith('verify:');
       const cls = verify ? ({ 'verify:approve': 'approved', 'verify:reject': 'rejected', 'verify:suspend': 'suspended' })[a.action]
+        : auditLabel(a) === 'Approved by Invitation' ? 'approved'
         : ({ 'account:deactivate': 'suspended', 'account:reactivate': 'approved' })[a.action] || 'neutral';
       return `<tr style="cursor:default">
         <td class="muted" title="${esc(fmtDateTime(a.at))}">${esc(fmtDateTime(a.at))}</td>

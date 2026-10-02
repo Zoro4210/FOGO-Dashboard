@@ -63,6 +63,7 @@
     background: var(--card); border-radius: var(--r-card); box-shadow: var(--shadow);
     padding: 18px 14px; display: flex; flex-direction: column; gap: 6px;
     position: sticky; top: 16px; height: calc(100vh - 32px);
+    overflow-y: auto; scrollbar-width: thin;
   }
   .brand { display: flex; align-items: center; gap: 10px; padding: 2px 6px 14px; }
   .brand-mark {
@@ -121,9 +122,11 @@
   .btn.sm { height: 32px; padding: 0 10px; font-size: 13px; }
 
   /* ---------- stats ---------- */
-  .stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid var(--line); border-radius: 14px; }
-  .stat { padding: 16px 18px; border-left: 1px solid var(--line); }
-  .stat:first-child { border-left: 0; }
+  /* Cards wrap onto as many rows as the width needs; the 1px gaps over the
+     line-coloured background draw the dividers, and cards on a short last
+     row stretch so there are never empty slots. */
+  .stats { display: flex; flex-wrap: wrap; gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+  .stat { flex: 1 1 170px; min-width: 0; padding: 16px 18px; background: var(--card); }
   .stat-label { font-size: 12.5px; font-weight: 600; color: var(--ink-soft); display: flex; align-items: center; gap: 6px; }
   .stat-value { font-size: 28px; font-weight: 800; letter-spacing: -.5px; margin: 6px 0 4px; }
   .stat-foot { font-size: 12px; color: var(--ink-faint); display: flex; align-items: center; flex-wrap: wrap; gap: 4px 6px; white-space: nowrap; }
@@ -143,9 +146,15 @@
   /* ---------- table ---------- */
   .table-card { border: 1px solid var(--line); border-radius: 14px; overflow: hidden; display: flex; flex-direction: column; }
   .table-scroll { overflow-x: auto; }
-  table { width: 100%; border-collapse: collapse; min-width: 860px; }
-  th { text-align: left; font-size: 12.5px; font-weight: 600; color: var(--ink-faint); background: #FBFAF8; padding: 11px 14px; border-bottom: 1px solid var(--line); white-space: nowrap; }
-  td { padding: 11px 14px; border-bottom: 1px solid var(--line-soft); vertical-align: middle; white-space: nowrap; }
+  /* Text cells wrap so tables fit an ordinary laptop window; only short
+     values (status pills, dates, codes) stay on one line. Very narrow
+     windows still get a horizontal scroll inside the card. */
+  table { width: 100%; border-collapse: collapse; min-width: 640px; }
+  th { text-align: left; font-size: 12.5px; font-weight: 600; color: var(--ink-faint); background: #FBFAF8; padding: 11px 12px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  td { padding: 11px 12px; border-bottom: 1px solid var(--line-soft); vertical-align: middle; overflow-wrap: break-word; }
+  td:has(.doc-name) { min-width: 180px; }
+  .doc-email { overflow-wrap: anywhere; }
+  td .pill, td.muted, td.mono, td .mono, td .btn { white-space: nowrap; overflow-wrap: normal; }
   tbody tr { cursor: pointer; transition: background-color .12s; }
   tbody tr:hover { background: #FAF9F6; }
   tbody tr:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
@@ -167,7 +176,6 @@
   .pill.rejected, .pill.suspended { background: var(--danger-fill); color: var(--danger); }
   .pill.open { background: var(--primary-light); color: var(--primary-dark); }
   .pill.neutral { background: var(--surface); color: var(--ink-soft); }
-  .doc-link { display: inline-flex; align-items: center; gap: 5px; color: var(--primary); font-weight: 600; }
   .empty { padding: 48px 16px; text-align: center; color: var(--ink-faint); }
   .empty b { display: block; color: var(--ink); font-size: 15px; margin-bottom: 4px; }
 
@@ -205,13 +213,6 @@
   .drawer-foot { padding: 14px 22px calc(14px + env(safe-area-inset-bottom)); border-top: 1px solid var(--line-soft); display: grid; gap: 10px; }
   .drawer-actions { display: flex; gap: 8px; flex-wrap: wrap; }
   .drawer-actions .btn { flex: 1; justify-content: center; }
-  .preview {
-    border: 1px solid var(--line); border-radius: 14px; background: var(--bg); min-height: 280px;
-    display: grid; place-items: center; overflow: hidden; position: relative;
-  }
-  .preview img { max-width: 100%; max-height: 460px; display: block; }
-  .preview iframe { width: 100%; height: 460px; border: 0; background: #fff; }
-  .preview .ph { color: var(--ink-faint); text-align: center; padding: 24px; }
   .kv { display: grid; grid-template-columns: 150px minmax(0,1fr); gap: 8px 14px; font-size: 13.5px; }
   .kv dt { color: var(--ink-faint); }
   .kv dd { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
@@ -254,12 +255,25 @@
   }
 
   /* ---------- responsive ---------- */
-  @media (max-width: 1100px) {
-    .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    .stat:nth-child(3) { border-left: 0; }
-    .stat:nth-child(n+3) { border-top: 1px solid var(--line); }
+  /* Ordinary (non-fullscreen) laptop windows: slimmer sidebar and padding. */
+  @media (max-width: 1280px) {
+    .app { grid-template-columns: 216px minmax(0, 1fr); gap: 12px; padding: 12px; }
+    .sidebar { top: 12px; height: calc(100vh - 24px); padding: 14px 10px; }
+    .nav-item.active::before { left: -10px; }
+    .main { padding: 18px; }
+    .stat { padding: 14px; }
+    .stat-value { font-size: 24px; }
   }
-  @media (max-width: 900px) {
+  /* Short windows (browser toolbars + taskbar): compact the sidebar so the
+     account and Sign Out stay reachable without scrolling. */
+  @media (max-height: 760px) {
+    .brand { padding-bottom: 8px; }
+    .search { margin-bottom: 4px; padding: 6px 10px; }
+    .nav-label { padding-top: 6px; }
+    .nav-item { padding: 7px 10px; }
+    .trial-note { display: none; }
+  }
+  @media (max-width: 1024px) {
     .app { grid-template-columns: 1fr; padding: 0; gap: 0; }
     .sidebar { position: fixed; z-index: 45; left: 0; top: 0; height: 100vh; width: 260px; border-radius: 0 16px 16px 0; transform: translateX(-105%); transition: transform .22s; }
     .sidebar.open { transform: none; }
@@ -268,8 +282,7 @@
     .topbar .sub { display: none; }
   }
   @media (max-width: 560px) {
-    .stats { grid-template-columns: 1fr 1fr; }
-    .stat { padding: 12px; }
+    .stat { flex-basis: 140px; padding: 12px; }
     .stat-value { font-size: 22px; }
     .topbar h1 { font-size: 19px; }
     .topbar .btn .lbl { display: none; }
@@ -321,7 +334,7 @@
     </label>
     <nav aria-label="Main">
       <div class="nav-label">Main Menu</div>
-      <button class="nav-item" data-view="doctors"><svg class="i" aria-hidden="true"><use href="#i-shield"/></svg>Doctor Verification<span class="nav-count" id="nav-pending" aria-label="pending">0</span></button>
+      <button class="nav-item" data-view="doctors"><svg class="i" aria-hidden="true"><use href="#i-shield"/></svg>Doctor Access<span class="nav-count" id="nav-pending" aria-label="pending approval">0</span></button>
       <button class="nav-item" data-view="invites"><svg class="i" aria-hidden="true"><use href="#i-mail"/></svg>Invites<span class="nav-count" id="nav-invites" aria-label="open">0</span></button>
       <div class="nav-label">Accounts</div>
       <button class="nav-item" data-view="patients"><svg class="i" aria-hidden="true"><use href="#i-users"/></svg>Patients<span class="nav-count" id="nav-patients" aria-label="active">0</span></button>
@@ -345,8 +358,8 @@
     <div class="topbar">
       <button class="btn icon menu-btn" id="menu-btn" aria-label="Open Menu" aria-controls="sidebar" aria-expanded="false"><svg class="i" aria-hidden="true"><use href="#i-menu"/></svg></button>
       <div style="min-width:0">
-        <h1 id="page-title">Doctor Verification</h1>
-        <div class="sub" id="page-sub">Review registration certificates before doctors can see patient data.</div>
+        <h1 id="page-title">Doctor Access</h1>
+        <div class="sub" id="page-sub">Invited doctors are active as soon as they sign up. Suspend access or approve legacy sign-ups here.</div>
       </div>
       <div class="spacer"></div>
       <button class="btn" id="refresh" aria-label="Refresh"><svg class="i" aria-hidden="true"><use href="#i-refresh"/></svg><span class="lbl">Refresh</span></button>
@@ -366,10 +379,10 @@
       <div class="table-card">
         <div class="table-scroll">
           <table>
-            <caption class="sr-only">Doctors. Select a row to review.</caption>
+            <caption class="sr-only">Doctors. Select a row to manage access.</caption>
             <thead><tr>
               <th class="check" scope="col"><label class="check-hit"><input type="checkbox" id="check-all" name="check-all" aria-label="Select all on this page"></label></th>
-              <th scope="col">Doctor</th><th scope="col">NMC / Registration</th><th scope="col">Site / Clinic</th><th scope="col">Invited</th><th scope="col">Submitted</th><th scope="col">Status</th><th scope="col">Document</th>
+              <th scope="col">Doctor</th><th scope="col">NMC / Registration</th><th scope="col">Site / Clinic</th><th scope="col">Invited</th><th scope="col">Signed Up</th><th scope="col">Status</th>
             </tr></thead>
             <tbody id="doctor-rows"></tbody>
           </table>
@@ -384,7 +397,7 @@
         <div class="table-scroll">
           <table>
             <caption class="sr-only">Investigator invites</caption>
-            <thead><tr><th scope="col">Invitee</th><th scope="col">NMC / Registration</th><th scope="col">Site</th><th scope="col">Invited</th><th scope="col">Signed Up</th><th scope="col">Verification</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
+            <thead><tr><th scope="col">Invitee</th><th scope="col">NMC / Registration</th><th scope="col">Site</th><th scope="col">Invited</th><th scope="col">Signed Up</th><th scope="col">Status</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
             <tbody id="invite-rows"></tbody>
           </table>
         </div>
@@ -412,7 +425,7 @@
         <div class="table-scroll">
           <table>
             <caption class="sr-only">Doctor accounts</caption>
-            <thead><tr><th scope="col">Doctor</th><th scope="col">Doctor ID</th><th scope="col">NMC / Registration</th><th scope="col">Clinic / Specialty</th><th scope="col">Verification</th><th scope="col">Patients</th><th scope="col">Status</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
+            <thead><tr><th scope="col">Doctor</th><th scope="col">Doctor ID</th><th scope="col">NMC / Registration</th><th scope="col">Clinic / Specialty</th><th scope="col">Access</th><th scope="col">Patients</th><th scope="col">Status</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
             <tbody id="rows-doctor-accounts"></tbody>
           </table>
         </div>
@@ -469,23 +482,18 @@
   </div>
   <div class="drawer-body">
     <div>
-      <div class="section-title">Registration Certificate</div>
-      <div class="preview" id="d-preview"><div class="ph">No document</div></div>
-      <div style="margin-top:8px" id="d-open"></div>
-    </div>
-    <div>
       <div class="section-title">Details</div>
       <dl class="kv" id="d-details"></dl>
     </div>
     <div id="d-history-wrap">
-      <div class="section-title">Review</div>
+      <div class="section-title">Approval</div>
       <div class="history" id="d-history"></div>
     </div>
   </div>
   <div class="drawer-foot" id="d-foot">
     <div class="field hidden" id="d-note-field">
       <label for="d-note" id="d-note-label">Reason (shown to the doctor)</label>
-      <textarea id="d-note" name="review-note" rows="3" maxlength="1000" autocomplete="off" placeholder="e.g. Certificate is blurred, please upload a clearer photo…" aria-describedby="d-err"></textarea>
+      <textarea id="d-note" name="review-note" rows="3" maxlength="1000" autocomplete="off" placeholder="e.g. Registration number could not be confirmed…" aria-describedby="d-err"></textarea>
     </div>
     <div class="err hidden" id="d-err" role="alert"></div>
     <div class="drawer-actions" id="d-actions"></div>
